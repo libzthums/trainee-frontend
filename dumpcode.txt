@@ -1,0 +1,303 @@
+import React, { useContext, useEffect, useState, useCallback } from "react";
+import axios from "axios";
+import { UrlContext } from "../router/route";
+import { Link, useLocation } from "react-router-dom";
+import { Button, Badge, Table } from "react-bootstrap";
+import { useUser } from "../context/userContext";
+
+export default function TotalPage() {
+  const { url } = useContext(UrlContext);
+  const location = useLocation();
+  const status = location?.state?.status || 1;
+  const { user, activeDivision } = useUser();
+
+  const today = new Date();
+  const [month, setMonth] = useState(today.getMonth());
+  const [year, setYear] = useState(today.getFullYear());
+  const [filteredData, setFilteredData] = useState([]);
+
+  const fetchData = useCallback(() => {
+    axios
+      .get(url + "service")
+      .then((res) => {
+        const result = [];
+
+        // Permission filtering
+        let visibleData = [];
+        if (user.permissionCode === 2 || user.permissionCode === 3) {
+          visibleData = res.data; // Admins/Managers see everything
+        } else {
+          visibleData = res.data.filter(
+            (item) => item.divisionID === activeDivision.id
+          );
+        }
+
+        visibleData.forEach((item) => {
+          const start = new Date(item.startDate);
+          const end = new Date(item.endDate);
+          const charge = Number(item.monthly_charge);
+
+          const isExpiringSoon =
+            item.expireStatusName?.toLowerCase() === "expire in 3 months";
+
+          const monthsDiff =
+            (end.getFullYear() - start.getFullYear()) * 12 +
+            (end.getMonth() - start.getMonth());
+
+          const isPerMonth =
+            status === 1 &&
+            (item.expireStatusName?.toLowerCase() === "issued" ||
+              isExpiringSoon);
+
+          const isPerYear =
+            status === 2 && (monthsDiff >= 11 || isExpiringSoon);
+
+          if (status === 1) {
+            let current = new Date(start);
+            while (current <= end) {
+              const currentMonth = current.getMonth();
+              const currentYear = current.getFullYear();
+              const inMonth = currentMonth === month && currentYear === year;
+
+              if (isPerMonth && inMonth) {
+                result.push({
+                  ...item,
+                  id: `${item.serviceID}-${currentMonth}`,
+                  displayMonth: new Date(current),
+                  monthlyCharge: charge,
+                });
+              }
+
+              current.setMonth(current.getMonth() + 1);
+            }
+          } else if (status === 2 && isPerYear) {
+            const startY = start.getFullYear();
+            const endY = end.getFullYear();
+
+            if (startY <= year && endY >= year) {
+              const monthsInYear = Array.from(
+                { length: 12 },
+                (_, i) => new Date(year, i)
+              );
+              const validMonths = monthsInYear.filter(
+                (m) => m >= start && m <= end
+              );
+              const monthsCount = validMonths.length;
+
+              result.push({
+                ...item,
+                id: `${item.serviceID}-${year}`,
+                displayMonth: new Date(year, 0),
+                monthlyCharge: charge * monthsCount,
+              });
+            }
+          }
+        });
+
+        setFilteredData(result);
+      })
+      .catch((err) => {
+        console.error("Failed to fetch:", err);
+      });
+  }, [url, status, month, year, activeDivision.id, user.permissionCode]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const getStatusVariant = (status) => {
+    switch (status?.toLowerCase()) {
+      case "issued":
+        return "success";
+      case "expire in 3 months":
+        return "warning";
+      case "just expired":
+        return "danger";
+      case "expired":
+        return "dark";
+      default:
+        return "secondary";
+    }
+  };
+
+  const totalPrice = filteredData.reduce((sum, item) => {
+    return sum + (isNaN(item.monthlyCharge) ? 0 : item.monthlyCharge);
+  }, 0);
+
+  const handlePrev = () => {
+    if (status === 1) {
+      if (month === 0) {
+        setMonth(11);
+        setYear(year - 1);
+      } else {
+        setMonth(month - 1);
+      }
+    } else {
+      setYear(year - 1);
+    }
+  };
+
+  const handleNext = () => {
+    if (status === 1) {
+      if (month === 11) {
+        setMonth(0);
+        setYear(year + 1);
+      } else {
+        setMonth(month + 1);
+      }
+    } else {
+      setYear(year + 1);
+    }
+  };
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return "N/A";
+    const options = { day: "2-digit", month: "short", year: "numeric" };
+    return new Date(dateStr).toLocaleDateString("en-GB", options);
+  };
+
+  return (
+    <div className="container p-4">
+      <h4>
+        Total cost {status === 1 ? "per month" : "per year"} in {year}
+      </h4>
+
+      <div className="d-flex justify-content-between align-items-center my-3">
+        <Button variant="light" onClick={handlePrev}>
+          &lt;&lt; {status === 1 ? "Previous month" : "Previous year"}
+        </Button>
+
+        <h5>
+          {status === 1
+            ? new Date(0, month).toLocaleString("en-US", { month: "long" })
+            : ""}
+        </h5>
+
+        <Button variant="light" onClick={handleNext}>
+          {status === 1 ? "Next month" : "Next year"} &gt;&gt;
+        </Button>
+      </div>
+
+      <div className="mt-3">
+        <Table striped bordered hover responsive>
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th>S/N</th>
+              <th>Contract No.</th>
+              <th>Brand</th>
+              <th>Model</th>
+              <th>Type</th>
+              <th>Location</th>
+              <th>Division</th>
+              <th>Monthly Charge</th>
+              <th>Vendor</th>
+              <th>Date of Issue</th>
+              <th>Date of Expire</th>
+              <th>Status</th>
+              <th>View</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredData.length > 0 ? (
+              filteredData.map((row) => (
+                <tr key={row.serviceID}>
+                  <td>{row.DeviceName}</td>
+                  <td>{row.serialNumber}</td>
+                  <td>{row.contractNo}</td>
+                  <td>{row.Brand}</td>
+                  <td>{row.Model}</td>
+                  <td>{row.Type}</td>
+                  <td>{row.Location}</td>
+                  <td>{row.divisionName}</td>
+                  <td>{row.monthlyCharge.toLocaleString()}</td>
+                  <td>{row.vendorName}</td>
+                  <td>{formatDate(row.startDate)}</td>
+                  <td>{formatDate(row.endDate)}</td>
+                  <td>
+                    <Badge bg={getStatusVariant(row.expireStatusName)}>
+                      {row.expireStatusName}
+                    </Badge>
+                  </td>
+                  <td>
+                    <Link to={`/docDetail/${row.serviceID}`}>
+                      <Button variant="info" size="sm">
+                        View
+                      </Button>
+                    </Link>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan="14" className="text-center">
+                  No data available.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </Table>
+      </div>
+
+      <div className="d-flex justify-content-start mt-3">
+        <div
+          className="border rounded p-3 bg-light text-center"
+          style={{ minWidth: "280px" }}
+        >
+          <div className="fw-bold">
+            Total {status === 1 ? "Monthly" : "Yearly"} Cost
+          </div>
+          <div className="fs-5 text-primary">
+            {totalPrice.toLocaleString("th-TH", {
+              style: "currency",
+              currency: "THB",
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+router.post("/insertdata", async (req, res) => {
+  try {
+    console.log("Request Body:", req.body); // Log the incoming data
+    const dataArray = Array.isArray(req.body) ? req.body : req.body.data;
+
+    if (!dataArray || dataArray.length === 0) {
+      return res.status(400).json({ error: "No data provided" });
+    }
+
+    for (const data of dataArray) {
+      const {
+        DeviceName,
+        divisionID,
+        price,
+        startDate,
+        endDate,
+        vendorName,
+        vendorPhone,
+        serialNumber,
+        contractNo,
+        Brand,
+        Model,
+        Type,
+        Location,
+        WarrantyCount,
+      } = data;
+
+      if (!DeviceName || !divisionID) {
+        return res.status(400).json({ error: "Missing required fields!!!" });
+      }
+
+      // Process each record (existing logic here)
+    }
+
+    res.status(201).json({ message: "Data processed successfully" });
+  } catch (error) {
+    console.error("Error inserting service:", error);
+    res.status(500).json({ error: "Database error" });
+  }
+});
